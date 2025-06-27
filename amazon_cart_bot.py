@@ -8,9 +8,18 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 import time
 import re
-import asyncio
 import threading
-from config import BOT_TOKEN, TARGET_CHANNEL_ID, AMARADER_BOT_ID
+
+# 設定ファイルから設定値を読み込み
+try:
+    from config import BOT_TOKEN, TARGET_CHANNEL_ID, AMARADER_BOT_ID
+except ImportError:
+    print("エラー: config.py ファイルが見つかりません。")
+    print("config.py ファイルを作成し、以下の設定を記述してください:")
+    print("BOT_TOKEN = 'your_bot_token_here'")
+    print("TARGET_CHANNEL_ID = your_channel_id")
+    print("AMARADER_BOT_ID = your_bot_user_id")
+    exit(1)
 
 # intents設定（メッセージ内容の読み取りに必要）
 intents = discord.Intents.default()
@@ -29,119 +38,162 @@ async def on_message(message):
     if message.channel.id != TARGET_CHANNEL_ID:
         return
     
-    # デバッグ：すべてのメッセージの詳細を出力
-    print(f'ユーザー名: {message.author.name}')
-    print(f'ユーザーID: {message.author.id}')
-    print(f'メッセージ内容: "{message.content}"')
-    print('---')
-    
-    # sasa3520からのメッセージのみ処理（テスト用）
-    if message.author.name == 'sasa3520':
-        print('対象ユーザーからのメッセージです')
+    # アマレーダー通知Botからのメッセージのみ処理
+    if message.author.id == AMARADER_BOT_ID:
+        print(f'アマレーダー通知を検出: {message.content}')
         
-        # ASINを抽出してAmazonページを開く
-        asin = extract_asin_from_message(message.content)
-        if asin:
+        # メッセージから情報を抽出
+        message_data = extract_notification_data(message.content)
+        if message_data:
+            asin = message_data['asin']
+            target_price = message_data['current_price']
             amazon_url = f'https://www.amazon.co.jp/dp/{asin}'
-            print(f'ASIN検出: {asin}')
-            print(f'Amazon URL: {amazon_url}')
+            
+            print(f'ASIN: {asin}, 目標価格: {target_price}円')
+            
             # 非同期でSelenium処理を実行
-            threading.Thread(target=open_url_with_selenium, args=(amazon_url,)).start()
+            threading.Thread(target=lambda: open_url_with_selenium(amazon_url, target_price)).start()
         else:
-            print('ASINが見つかりませんでした')
+            print('通知形式が認識できませんでした')
 
-def extract_asin_from_message(content):
-    """メッセージからASINを抽出"""
-    # パターン1: ■ASIN B0DJNDV18B の形式
-    asin_match = re.search(r'■ASIN\s+([A-Z0-9]{10})', content)
-    if asin_match:
-        return asin_match.group(1)
-    
-    # パターン2: asin=B0DJNDV18B の形式
-    asin_match = re.search(r'asin=([A-Z0-9]{10})', content)
-    if asin_match:
-        return asin_match.group(1)
-    
-    # パターン3: 10文字の英数字（ASIN形式）を直接検索
-    asin_match = re.search(r'[A-Z0-9]{10}', content)
-    if asin_match:
-        return asin_match.group(0)
-    
-    return None
+def extract_notification_data(content):
+    """通知メッセージから価格とASINを抽出"""
+    try:
+        # 現在価格を抽出（例：現在：4138 円）
+        current_price_match = re.search(r'現在：(\d+)\s*円', content)
+        if not current_price_match:
+            return None
+        current_price = int(current_price_match.group(1))
+        
+        # ASINを抽出
+        asin_match = re.search(r'■ASIN\s+([A-Z0-9]{10})', content)
+        if not asin_match:
+            return None
+        asin = asin_match.group(1)
+        
+        return {
+            'current_price': current_price,
+            'asin': asin
+        }
+        
+    except Exception as e:
+        print(f'メッセージ解析エラー: {e}')
+        return None
 
-def open_url_with_selenium(url):
-    """SeleniumでURLを開き、「すべての出品を見る」→「カートに追加」"""
+def open_url_with_selenium(url, target_price):
+    """SeleniumでURLを開き、価格が一致する商品をカートに追加"""
+    driver = None
     try:
         print(f'Seleniumでページを開いています: {url}')
+        print(f'目標価格: {target_price}円')
         
         # Chrome オプション
         chrome_options = Options()
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         
-        # WebDriver管理者が自動的に適切なChromeDriverをダウンロード
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
         driver.get(url)
-        time.sleep(3)  # ページ読み込み待機
+
         print(f'ページが開かれました: {driver.title}')
         
+        # TODO: 最初にboxが出てきた際に「すべての出品を見る」ボタンは表示されないので、まずはboxの要素を探す。
+        # TODO: もしかすると最初から「すべての出品を見る」に移動したほうが早いかもしれない
         # Step 1: 「すべての出品を見る」ボタンをクリック
         try:
             wait = WebDriverWait(driver, 10)
-            
-            # XPathでテキスト検索
-            xpath_selector = "//a[contains(text(), 'すべての出品を見る')]"
             view_all_button = wait.until(
-                EC.element_to_be_clickable((By.XPATH, xpath_selector))
+                EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'すべての出品を見る')]"))
             )
             view_all_button.click()
             print('「すべての出品を見る」ボタンをクリックしました')
+            time.sleep(1)  # ページ遷移を十分に待つ
             
-            # ページ遷移を待つ
-            time.sleep(3)
+            # URLが変わらない場合は直接移動
+            if '/gp/offer-listing/' not in driver.current_url:
+                offer_url = url.replace('/dp/', '/gp/offer-listing/') + '/'
+                print(f'直接offer-listingページに移動: {offer_url}')
+                driver.get(offer_url)
+                time.sleep(1)
             
         except Exception as e:
-            print(f'「すべての出品を見る」クリックでエラー: {e}')
-            driver.save_screenshot('no_view_all_button.png')
-            return
+            print(f'「すべての出品を見る」ボタンエラー: {e}')
+            # 直接offer-listingページに移動
+            offer_url = url.replace('/dp/', '/gp/offer-listing/') + '/'
+            print(f'直接移動: {offer_url}')
+            driver.get(offer_url)
+            time.sleep(1)
         
-        # Step 2: カートに追加ボタンをクリック
+        print(f'現在のURL: {driver.current_url}')
+        
+        # Step 2: 価格が一致する商品を探してカートに追加
+        # TODO: 価格のコンディションが新品の場合の判定を追加 <span class="a-size-base a-text-bold">     新品    </span>
+        # TODO: ほぼ新品もNG
+        
         try:
-            # カートに追加ボタンの候補
-            add_to_cart_selectors = [
-                'input[name="submit.addToCart"]',
-                'input[value*="カートに追加"]',
-                'input[title*="カートに追加"]',
-                '#add-to-cart-button'
-            ]
+            # 価格要素をすべて取得
+            price_elements = driver.find_elements(By.CSS_SELECTOR, '.a-price-whole')
+            print(f'見つかった価格要素: {len(price_elements)}個')
             
-            cart_clicked = False
-            for selector in add_to_cart_selectors:
+            target_found = False
+            
+            for i, price_elem in enumerate(price_elements):
                 try:
-                    add_to_cart_button = wait.until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                    )
-                    add_to_cart_button.click()
-                    print(f'カートに追加ボタンをクリックしました: {selector}')
-                    cart_clicked = True
-                    break
-                except:
+                    price_text = price_elem.text.strip()
+                    print(f'価格 {i+1}: "{price_text}"')
+                    
+                    # 価格を数値化（カンマを除去）
+                    if price_text and price_text.replace(',', '').isdigit():
+                        price_value = int(price_text.replace(',', ''))
+                        print(f'価格 {i+1}: {price_value}円 (目標: {target_price}円)')
+                        
+                        # 価格がぴったり一致する場合
+                        if price_value == target_price:
+                            print(f'目標価格に一致する商品を発見: {price_value}円')
+                            
+                            # 価格要素の親要素から出品全体を特定
+                            offer_section = price_elem
+                            for _ in range(10):  # 最大10回上位要素を探索
+                                offer_section = offer_section.find_element(By.XPATH, '..')
+                                # カートボタンがこのセクション内にあるかチェック
+                                cart_buttons = offer_section.find_elements(By.XPATH, './/input[@name="submit.addToCart" or contains(@value, "カートに追加")]')
+                                if cart_buttons:
+                                    print(f'カートボタンを発見: {cart_buttons[0].get_attribute("value")}')
+                                    
+                                    # カートに追加をクリック
+                                    driver.execute_script("arguments[0].click();", cart_buttons[0])
+                                    print(f'✓ {price_value}円の商品をカートに追加しました')
+                                    target_found = True
+                                    break
+                            
+                            if target_found:
+                                break
+                        else:
+                            print(f'価格不一致: {price_value}円 ≠ {target_price}円')
+                
+                except Exception as e:
+                    print(f'価格 {i+1} の処理でエラー: {e}')
                     continue
             
-            if not cart_clicked:
-                print('カートに追加ボタンが見つかりませんでした')
+            if not target_found:
+                print(f'✗ 目標価格 {target_price}円の商品が見つかりませんでした')
+                # デバッグ用：見つかった価格をすべて表示
+                all_prices = [elem.text.strip() for elem in price_elements if elem.text.strip()]
+                print(f'見つかった価格: {all_prices}')
                 
         except Exception as e:
-            print(f'カートに追加でエラー: {e}')
+            print(f'価格検索でエラー: {e}')
                 
-        # 少し待機してから終了
         time.sleep(2)
         
     except Exception as e:
-        print(f'エラーが発生しました: {e}')
+        print(f'全体エラー: {e}')
 
-if __name__ == "__main__":
-    # ボット実行
-    client.run(BOT_TOKEN)
+    finally:
+        if driver:
+            driver.quit()
+
+# ボット実行
+client.run(BOT_TOKEN)
