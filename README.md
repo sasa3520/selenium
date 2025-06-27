@@ -52,6 +52,8 @@ pip install discord.py selenium webdriver-manager
    - ✅ **Presence Intent** にチェックを入れる
    - ✅ **Server Members Intent** にチェックを入れる
    - ✅ **MESSAGE CONTENT INTENT** にチェックを入れる
+ ![image](https://github.com/user-attachments/assets/e8f2fb07-0a04-4a40-9156-01e4ee099d0b)
+
 2. 「**Save Changes**」をクリック
 
 ### 2.4 ボットをサーバーに招待
