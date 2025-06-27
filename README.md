@@ -49,6 +49,8 @@ pip install discord.py selenium webdriver-manager
 ### 2.3 重要：Privileged Intentsの有効化
 
 1. 同じ「Bot」ページの下部「**Privileged Gateway Intents**」セクションで：
+   - ✅ **Presence Intent** にチェックを入れる
+   - ✅ **Server Members Intent** にチェックを入れる
    - ✅ **MESSAGE CONTENT INTENT** にチェックを入れる
 2. 「**Save Changes**」をクリック
 
